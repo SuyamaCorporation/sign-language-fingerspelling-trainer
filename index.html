@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>手話指文字トレーナー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  body { background: #111; color: #f0f0f0; }
+  .btn-primary { background: #c00; color: #fff; border: 2px solid #f00; font-weight: bold; }
+  .btn-primary:hover { background: #e00; }
+  .btn-secondary { background: #222; color: #fff; border: 2px solid #fff; font-weight: bold; }
+  .btn-secondary:hover { background: #333; }
+  .tab-active { background: #c00; color: #fff; border: 2px solid #f00; }
+  .tab-inactive { background: #111; color: #aaa; border: 2px solid #555; }
+  .hand-svg { display: block; }
+</style>
+</head>
+<body class="min-h-screen">
+<div class="max-w-3xl mx-auto p-3">
+  <h1 class="text-2xl font-bold text-center mb-1" style="color:#ff3333">手話指文字トレーナー</h1>
+  <p class="text-center text-gray-400 text-xs mb-3">ASL（アメリカ手話）とJSL（日本語指文字）の練習ツール</p>
+
+  <!-- Mode selector -->
+  <div class="flex gap-2 mb-4 justify-center">
+    <button id="tabASL" class="px-4 py-2 rounded text-sm tab-active" aria-label="ASLモードに切り替え">ASL（英語）</button>
+    <button id="tabJSL" class="px-4 py-2 rounded text-sm tab-inactive" aria-label="JSLモードに切り替え">JSL（日本語）</button>
+  </div>
+
+  <!-- Sub-mode -->
+  <div class="flex gap-2 mb-4 justify-center">
+    <button id="modeLearning" class="px-4 py-2 rounded text-sm" style="background:#c00;color:#fff;border:2px solid #f00;font-weight:bold" aria-label="学習モード">📖 学習モード</button>
+    <button id="modeTest" class="px-4 py-2 rounded text-sm" style="background:#222;color:#aaa;border:2px solid #555" aria-label="テストモード">⚡ テストモード</button>
+  </div>
+
+  <!-- Stats bar -->
+  <div class="flex gap-4 justify-center mb-4 text-xs text-gray-400">
+    <span>今日の練習: <span id="sessionCount" class="text-white font-bold">0</span> 文字</span>
+    <span>累計: <span id="totalCount" class="text-white font-bold">0</span> 文字</span>
+    <button id="resetStats" class="text-red-500 underline text-xs" aria-label="統計をリセット">リセット</button>
+  </div>
+
+  <!-- Learning mode -->
+  <div id="learningPanel">
+    <div class="flex items-center justify-center gap-4 mb-4">
+      <button id="prevBtn" class="btn-secondary px-4 py-2 rounded text-xl" aria-label="前の文字へ">◀</button>
+      <div class="text-center">
+        <div id="letterDisplay" class="text-6xl font-bold" style="color:#ff3333; min-width:80px"></div>
+        <div id="letterName" class="text-gray-400 text-sm mt-1"></div>
+      </div>
+      <button id="nextBtn" class="btn-secondary px-4 py-2 rounded text-xl" aria-label="次の文字へ">▶</button>
+    </div>
+    <div class="flex justify-center mb-3">
+      <div id="handShapeContainer" style="width:200px;height:220px">
+        <svg id="handSVG" viewBox="0 0 200 220" width="200" height="220" class="hand-svg" aria-label="手の形のイラスト"></svg>
+      </div>
+    </div>
+    <div id="fingerDesc" class="text-center text-gray-300 text-sm mb-3"></div>
+
+    <!-- Navigation dots -->
+    <div id="navDots" class="flex flex-wrap justify-center gap-1 mb-3"></div>
+  </div>
+
+  <!-- Test mode -->
+  <div id="testPanel" class="hidden">
+    <div class="text-center mb-4">
+      <div id="testPrompt" class="text-7xl font-bold mb-2" style="color:#ff3333"></div>
+      <div id="testHint" class="text-gray-500 text-sm">この文字の手形を作ってください</div>
+    </div>
+    <div class="flex justify-center mb-4">
+      <button id="showRef" class="btn-primary px-6 py-3 rounded text-lg" aria-label="正解を表示する">正解を見る</button>
+    </div>
+    <div id="testRefContainer" class="hidden">
+      <div class="flex justify-center mb-2">
+        <svg id="testHandSVG" viewBox="0 0 200 220" width="200" height="220" class="hand-svg" aria-label="正解の手の形"></svg>
+      </div>
+      <div id="testDesc" class="text-center text-gray-300 text-sm mb-3"></div>
+      <div class="flex justify-center gap-3">
+        <button id="nextTestBtn" class="btn-primary px-6 py-3 rounded" aria-label="次の問題へ">次へ ▶</button>
+      </div>
+    </div>
+    <div id="testTimer" class="text-center text-gray-500 text-sm mt-2"></div>
+  </div>
+</div>
+
+<script>
+// ========================
+// ASL Fingerspelling Data
+// Each letter: label, description of hand shape, SVG path data (schematic)
+// ========================
+
+// We draw a schematic hand: palm + 5 fingers (thumb, index, middle, ring, pinky)
+// Each finger described as: extended (true/false), curled (0=open, 1=half, 2=full)
+// Thumb: separate positioning
+
+// Simplified SVG hand drawing function
+function drawHand(svgEl, config) {
+  // config: { thumb: {ext, angle}, fingers: [{ext, curl, spread}x4], note }
+  // Clear
+  while (svgEl.firstChild) svgEl.removeChild(svgEl.firstChild);
+
+  const ns = 'http://www.w3.org/2000/svg';
+  function el(tag, attrs) {
+    const e = document.createElementNS(ns, tag);
+    Object.entries(attrs).forEach(([k,v]) => e.setAttribute(k, v));
+    return e;
+  }
+
+  // Background
+  svgEl.appendChild(el('rect', { x:0, y:0, width:200, height:220, fill:'#111' }));
+
+  // Palm
+  svgEl.appendChild(el('ellipse', { cx:100, cy:150, rx:50, ry:55, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'2' }));
+
+  // Wrist
+  svgEl.appendChild(el('rect', { x:68, y:185, width:64, height:30, rx:8, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'2' }));
+
+  // Finger data: [x_base, finger_name]
+  const fingerBases = [
+    { x: 62, label: '人' },
+    { x: 82, label: '中' },
+    { x: 100, label: '薬' },
+    { x: 117, label: '小' },
+  ];
+
+  // Draw 4 fingers (index, middle, ring, pinky)
+  config.fingers.forEach((f, i) => {
+    const bx = fingerBases[i].x;
+    const by = 110;
+    const len = [52, 56, 50, 42][i];
+
+    if (f.curl === 0) {
+      // Extended
+      svgEl.appendChild(el('rect', { x: bx-8, y: by-len, width:16, height:len, rx:7, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'1.5' }));
+    } else if (f.curl === 1) {
+      // Half curl - bent at middle
+      const path = `M${bx-7},${by} L${bx-7},${by-len*0.55} Q${bx+len*0.25},${by-len*0.8} ${bx+8},${by-len*0.45} L${bx+8},${by-len*0.45} Q${bx+8},${by-len*0.3} ${bx},${by-len*0.25} Z`;
+      svgEl.appendChild(el('path', { d: path, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'1.5' }));
+    } else {
+      // Fully curled
+      svgEl.appendChild(el('ellipse', { cx: bx, cy: by-16, rx:9, ry:14, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'1.5' }));
+    }
+    // Knuckle line
+    svgEl.appendChild(el('line', { x1: bx-8, y1: by, x2: bx+8, y2: by, stroke:'#cc8844', 'stroke-width':'1', opacity:'0.6' }));
+  });
+
+  // Thumb
+  const tx = config.thumb.x || 52;
+  const ty = config.thumb.y || 140;
+  if (config.thumb.ext) {
+    svgEl.appendChild(el('rect', { x: tx-8, y: ty-38, width:16, height:40, rx:7, transform:`rotate(${config.thumb.angle||0},${tx},${ty})`, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'1.5' }));
+  } else {
+    svgEl.appendChild(el('ellipse', { cx: tx, cy: ty-8, rx:10, ry:14, fill:'#ffc98a', stroke:'#cc8844', 'stroke-width':'1.5' }));
+  }
+
+  // Note text
+  if (config.note) {
+    const t = el('text', { x:100, y:215, 'text-anchor':'middle', fill:'#ff9999', 'font-size':'11', 'font-family':'sans-serif' });
+    t.textContent = config.note;
+    svgEl.appendChild(t);
+  }
+}
+
+// Hand configs per ASL letter
+// curl: 0=open/extended, 1=half, 2=closed
+const ASL = [
+  { letter: 'A', name: 'A', desc: '4本指を握り、親指を横に出す', hand: { thumb: { ext: true, x:52, y:138, angle:-30 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'B', name: 'B', desc: '4本指を揃えて伸ばし、親指を内側に折る', hand: { thumb: { ext: false, x:58, y:148 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:0}] } },
+  { letter: 'C', name: 'C', desc: '指を丸めてCの形を作る', hand: { thumb: { ext: true, x:50, y:132, angle:-20 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}], note:'C字型' } },
+  { letter: 'D', name: 'D', desc: '人差し指を立て、他の指と親指で輪を作る', hand: { thumb: { ext: true, x:54, y:143, angle:-15 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'E', name: 'E', desc: '全指を第一関節で曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}], note:'爪側を見る' } },
+  { letter: 'F', name: 'F', desc: '人差し指と親指で輪を作り、他は伸ばす', hand: { thumb: { ext: true, x:56, y:148, angle:-10 }, fingers: [{curl:2},{curl:0},{curl:0},{curl:0}] } },
+  { letter: 'G', name: 'G', desc: '人差し指と親指を横に向けて伸ばす', hand: { thumb: { ext: true, x:44, y:135, angle:-45 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'H', name: 'H', desc: '人差し指と中指を揃えて横に向ける', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}] } },
+  { letter: 'I', name: 'I', desc: '小指だけを立てる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:0}] } },
+  { letter: 'J', name: 'J', desc: '小指を立ててJの字を描く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:0}], note:'Jの字を描く' } },
+  { letter: 'K', name: 'K', desc: '人差し指・中指を上げ、親指を人差し指中間に', hand: { thumb: { ext: true, x:55, y:142, angle:-20 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}] } },
+  { letter: 'L', name: 'L', desc: '人差し指を上、親指を横に伸ばす（L字）', hand: { thumb: { ext: true, x:44, y:140, angle:-50 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'M', name: 'M', desc: '3本指を折り曲げ親指の上に乗せる', hand: { thumb: { ext: false, x:60, y:155 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:2}], note:'親指を隠す' } },
+  { letter: 'N', name: 'N', desc: '人差し指・中指を折り親指の上に乗せる', hand: { thumb: { ext: false, x:60, y:155 }, fingers: [{curl:1},{curl:1},{curl:2},{curl:2}], note:'親指を隠す' } },
+  { letter: 'O', name: 'O', desc: '全指を丸めてOの形を作る', hand: { thumb: { ext: true, x:50, y:135, angle:-30 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}], note:'O字型' } },
+  { letter: 'P', name: 'P', desc: '人差し指を下向きに出し、親指と中指でつまむ', hand: { thumb: { ext: true, x:55, y:145, angle:-10 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}], note:'下向き' } },
+  { letter: 'Q', name: 'Q', desc: '人差し指と親指で輪を作り下向きに', hand: { thumb: { ext: true, x:50, y:140, angle:-25 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:2}], note:'下向きG' } },
+  { letter: 'R', name: 'R', desc: '人差し指と中指を交差させる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}], note:'交差' } },
+  { letter: 'S', name: 'S', desc: '全指を握り拳にする', hand: { thumb: { ext: true, x:52, y:140, angle:-20 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:2}], note:'拳' } },
+  { letter: 'T', name: 'T', desc: '人差し指を折り、親指を人差し指と中指の間に通す', hand: { thumb: { ext: true, x:57, y:148, angle:-5 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:2}], note:'親指を通す' } },
+  { letter: 'U', name: 'U', desc: '人差し指と中指を揃えて上に伸ばす', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}] } },
+  { letter: 'V', name: 'V', desc: '人差し指と中指をV字に開く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}], note:'V字に開く' } },
+  { letter: 'W', name: 'W', desc: '人差し指・中指・薬指を開く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:2}] } },
+  { letter: 'X', name: 'X', desc: '人差し指をフックのように曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}], note:'フック型' } },
+  { letter: 'Y', name: 'Y', desc: '親指と小指を伸ばす（シャカ）', hand: { thumb: { ext: true, x:44, y:138, angle:-50 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:0}] } },
+  { letter: 'Z', name: 'Z', desc: '人差し指でZの字を空中に描く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}], note:'Zを描く' } },
+];
+
+// JSL: Japanese fingerspelling (hiragana subset, simplified)
+const JSL = [
+  { letter: 'あ', name: 'あ', desc: '手のひらを前向きにして開く', hand: { thumb: { ext: true, x:44, y:135, angle:-45 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:0}] } },
+  { letter: 'い', name: 'い', desc: '人差し指と中指を伸ばす', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}] } },
+  { letter: 'う', name: 'う', desc: '人差し指だけ伸ばす', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'え', name: 'え', desc: '全指を開き、横向きにする', hand: { thumb: { ext: true, x:44, y:135, angle:-40 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:0}], note:'横向き' } },
+  { letter: 'お', name: 'お', desc: '拳を作り小指側を前に', hand: { thumb: { ext: true, x:52, y:140, angle:-20 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:2}], note:'小指側を前に' } },
+  { letter: 'か', name: 'か', desc: '人差し指と親指でLを作る', hand: { thumb: { ext: true, x:44, y:140, angle:-50 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'き', name: 'き', desc: '人差し指・中指を伸ばし斜めに向ける', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}], note:'斜め向き' } },
+  { letter: 'く', name: 'く', desc: '人差し指を曲げてフック型', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}], note:'フック型' } },
+  { letter: 'け', name: 'け', desc: 'K字型：人差し指・中指・親指', hand: { thumb: { ext: true, x:55, y:142, angle:-20 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}] } },
+  { letter: 'こ', name: 'こ', desc: '人差し指と中指を水平に伸ばす', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:2},{curl:2}], note:'水平' } },
+  { letter: 'さ', name: 'さ', desc: '全指を軽く曲げる', hand: { thumb: { ext: true, x:50, y:132, angle:-20 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}] } },
+  { letter: 'し', name: 'し', desc: '小指だけ伸ばしてしの字', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:2},{curl:2},{curl:2},{curl:0}], note:'しの字' } },
+  { letter: 'す', name: 'す', desc: '人差し指を少し曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'せ', name: 'せ', desc: '全指を開き手のひらを見せる', hand: { thumb: { ext: true, x:44, y:135, angle:-45 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:0}], note:'手のひら前' } },
+  { letter: 'そ', name: 'そ', desc: '人差し指を伸ばし下向きに曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}], note:'そ字を描く' } },
+  { letter: 'た', name: 'た', desc: '人差し指・中指・薬指を開く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:0},{curl:0},{curl:2}] } },
+  { letter: 'ち', name: 'ち', desc: '人差し指を丸めてちの字', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}], note:'ちの字' } },
+  { letter: 'つ', name: 'つ', desc: '全指を丸めてOの形', hand: { thumb: { ext: true, x:50, y:135, angle:-30 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}], note:'O字型' } },
+  { letter: 'て', name: 'て', desc: '4本指を揃えて曲げる', hand: { thumb: { ext: false, x:58, y:148 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}] } },
+  { letter: 'と', name: 'と', desc: '人差し指を立て、先を曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'な', name: 'な', desc: '人差し指・中指を丸めて横に', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:1},{curl:2},{curl:2}], note:'横向き' } },
+  { letter: 'に', name: 'に', desc: '人差し指を立て先を横向き', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}], note:'横向き' } },
+  { letter: 'ぬ', name: 'ぬ', desc: '全指を丸めてぬの字', hand: { thumb: { ext: true, x:50, y:132, angle:-15 }, fingers: [{curl:1},{curl:1},{curl:1},{curl:1}] } },
+  { letter: 'ね', name: 'ね', desc: '人差し指を丸く曲げる', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:1},{curl:2},{curl:2},{curl:2}] } },
+  { letter: 'の', name: 'の', desc: '人差し指で円を描く', hand: { thumb: { ext: false, x:57, y:150 }, fingers: [{curl:0},{curl:2},{curl:2},{curl:2}], note:'円を描く' } },
+];
+
+let currentAlphabet = ASL;
+let currentMode = 'learning';
+let currentIndex = 0;
+let testTimer = null;
+let testCountdown = 0;
+
+// Stats
+function loadStats() {
+  return JSON.parse(localStorage.getItem('fingerspelling-stats') || '{"session":0,"total":0}');
+}
+function saveStats(s) { localStorage.setItem('fingerspelling-stats', JSON.stringify(s)); }
+function incrementStat() {
+  const s = loadStats();
+  s.session++;
+  s.total++;
+  saveStats(s);
+  updateStatsDisplay();
+}
+function updateStatsDisplay() {
+  const s = loadStats();
+  document.getElementById('sessionCount').textContent = s.session;
+  document.getElementById('totalCount').textContent = s.total;
+}
+document.getElementById('resetStats').addEventListener('click', () => {
+  saveStats({ session: 0, total: 0 });
+  updateStatsDisplay();
+});
+
+// Tab switching
+document.getElementById('tabASL').addEventListener('click', () => {
+  currentAlphabet = ASL;
+  currentIndex = 0;
+  document.getElementById('tabASL').className = 'px-4 py-2 rounded text-sm tab-active';
+  document.getElementById('tabJSL').className = 'px-4 py-2 rounded text-sm tab-inactive';
+  refreshLearning();
+  buildNavDots();
+  if (currentMode === 'test') startTest();
+});
+document.getElementById('tabJSL').addEventListener('click', () => {
+  currentAlphabet = JSL;
+  currentIndex = 0;
+  document.getElementById('tabJSL').className = 'px-4 py-2 rounded text-sm tab-active';
+  document.getElementById('tabASL').className = 'px-4 py-2 rounded text-sm tab-inactive';
+  refreshLearning();
+  buildNavDots();
+  if (currentMode === 'test') startTest();
+});
+
+// Mode switching
+document.getElementById('modeLearning').addEventListener('click', () => {
+  currentMode = 'learning';
+  document.getElementById('modeLearning').style.cssText = 'background:#c00;color:#fff;border:2px solid #f00;font-weight:bold;padding:0.5rem 1rem;border-radius:0.25rem;font-size:0.875rem';
+  document.getElementById('modeTest').style.cssText = 'background:#222;color:#aaa;border:2px solid #555;padding:0.5rem 1rem;border-radius:0.25rem;font-size:0.875rem';
+  document.getElementById('learningPanel').classList.remove('hidden');
+  document.getElementById('testPanel').classList.add('hidden');
+  if (testTimer) clearInterval(testTimer);
+  refreshLearning();
+});
+document.getElementById('modeTest').addEventListener('click', () => {
+  currentMode = 'test';
+  document.getElementById('modeTest').style.cssText = 'background:#c00;color:#fff;border:2px solid #f00;font-weight:bold;padding:0.5rem 1rem;border-radius:0.25rem;font-size:0.875rem';
+  document.getElementById('modeLearning').style.cssText = 'background:#222;color:#aaa;border:2px solid #555;padding:0.5rem 1rem;border-radius:0.25rem;font-size:0.875rem';
+  document.getElementById('learningPanel').classList.add('hidden');
+  document.getElementById('testPanel').classList.remove('hidden');
+  startTest();
+});
+
+function refreshLearning() {
+  const item = currentAlphabet[currentIndex];
+  document.getElementById('letterDisplay').textContent = item.letter;
+  document.getElementById('letterName').textContent = item.name;
+  document.getElementById('fingerDesc').textContent = item.desc;
+  drawHand(document.getElementById('handSVG'), item.hand);
+  buildNavDots();
+}
+
+function buildNavDots() {
+  const dots = document.getElementById('navDots');
+  dots.innerHTML = '';
+  currentAlphabet.forEach((item, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'w-6 h-6 rounded text-xs font-bold transition-all';
+    dot.style.cssText = i === currentIndex
+      ? 'background:#c00;color:#fff;border:1px solid #f00'
+      : 'background:#222;color:#888;border:1px solid #444';
+    dot.setAttribute('aria-label', item.letter + 'に移動');
+    dot.textContent = item.letter;
+    dot.addEventListener('click', () => { currentIndex = i; refreshLearning(); });
+    dots.appendChild(dot);
+  });
+}
+
+document.getElementById('prevBtn').addEventListener('click', () => {
+  currentIndex = (currentIndex - 1 + currentAlphabet.length) % currentAlphabet.length;
+  incrementStat();
+  refreshLearning();
+});
+document.getElementById('nextBtn').addEventListener('click', () => {
+  currentIndex = (currentIndex + 1) % currentAlphabet.length;
+  incrementStat();
+  refreshLearning();
+});
+
+// Test mode
+let testQueue = [];
+let testCurrentItem = null;
+function startTest() {
+  testQueue = [...currentAlphabet].sort(() => Math.random() - 0.5);
+  nextTestItem();
+}
+
+function nextTestItem() {
+  if (testQueue.length === 0) {
+    testQueue = [...currentAlphabet].sort(() => Math.random() - 0.5);
+  }
+  testCurrentItem = testQueue.pop();
+  document.getElementById('testPrompt').textContent = testCurrentItem.letter;
+  document.getElementById('testHint').textContent = 'この文字の手形を作ってください';
+  document.getElementById('testRefContainer').classList.add('hidden');
+  if (testTimer) clearInterval(testTimer);
+}
+
+document.getElementById('showRef').addEventListener('click', () => {
+  document.getElementById('testRefContainer').classList.remove('hidden');
+  drawHand(document.getElementById('testHandSVG'), testCurrentItem.hand);
+  document.getElementById('testDesc').textContent = testCurrentItem.desc;
+  incrementStat();
+});
+
+document.getElementById('nextTestBtn').addEventListener('click', () => {
+  nextTestItem();
+});
+
+// Keyboard navigation
+document.addEventListener('keydown', e => {
+  if (currentMode === 'learning') {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') { document.getElementById('nextBtn').click(); }
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') { document.getElementById('prevBtn').click(); }
+  } else if (currentMode === 'test') {
+    if (e.key === ' ' || e.key === 'Enter') {
+      const refHidden = document.getElementById('testRefContainer').classList.contains('hidden');
+      if (refHidden) document.getElementById('showRef').click();
+      else document.getElementById('nextTestBtn').click();
+    }
+  }
+});
+
+// Initialize
+updateStatsDisplay();
+refreshLearning();
+</script>
+</body>
+</html>
